@@ -31,7 +31,7 @@ export const WEEK_MS = 7 * 24 * 3600 * 1000;
 
 /* ---------- Apify (async runs, polled) ---------- */
 const APIFY = "https://api.apify.com/v2";
-const apifyToken = () => env("APIFY_TOKEN", "APIFY_API_TOKEN", "ApifyToken");
+const apifyToken = () => env("APIFY_TOKEN", "APIFY_API_TOKEN", "ApifyToken", "Apify", "APIFY");
 
 export async function apifyStart(actor, input) {
   const token = apifyToken();
@@ -80,7 +80,7 @@ export async function useBudget() {
 /* ---------- AI (OpenAI-compatible; point AI_BASE_URL at Bifrost later) ---------- */
 export async function aiJSON(system, user) {
   const base = env("AI_BASE_URL") || "https://generativelanguage.googleapis.com/v1beta/openai";
-  const key = env("AI_API_KEY", "GEMINI_API_KEY", "GemAPIKey");
+  const key = env("AI_API_KEY", "GEMINI_API_KEY", "GemAPIKey", "GEMAPIKEY");
   const model = env("AI_MODEL") || "gemini-2.5-flash";
   if (!key) throw new Error("AI key missing. Add GEMINI_API_KEY in Netlify → Environment variables.");
   const r = await fetch(`${base.replace(/\/$/, "")}/chat/completions`, {
