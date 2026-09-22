@@ -1,6 +1,13 @@
 # Copyright (c) 2026 Tanshu Singh / StayScout. All rights reserved. Proprietary and confidential.
 [build]
-  publish = "public"
+  command = "npm run build"
+  publish = "out"
+
+[build.environment]
+  NODE_VERSION = "22"
+  NEXT_TELEMETRY_DISABLED = "1"
+  # The site is a static export (next.config.ts: output "export"), so Netlify's Next.js server runtime isn't needed.
+  NETLIFY_NEXT_PLUGIN_SKIP = "true"
 
 [functions]
   directory = "netlify/functions"
@@ -13,4 +20,10 @@
     X-Content-Type-Options = "nosniff"
     Referrer-Policy = "strict-origin-when-cross-origin"
     Strict-Transport-Security = "max-age=31536000; includeSubDomains"
+    Permissions-Policy = "camera=(), microphone=(), geolocation=()"
     X-Robots-Tag = "noai, noimageai"
+
+[[headers]]
+  for = "/_next/static/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"

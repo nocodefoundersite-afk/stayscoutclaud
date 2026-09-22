@@ -61,20 +61,51 @@ export async function apifyItems(datasetId, limit = 100) {
   return r.json();
 }
 
-/* ---------- Monthly budget guard (protects free credit) ---------- */
-export async function useBudget() {
+/* ---------- Sign-in check (Netlify Identity) ---------- */
+export async function requireUser(req) {
+  const h = req.headers.get("authorization") || "";
+  if (!/^Bearer\s+\S+/.test(h)) {
+    const e = new Error("Sign in to run a new analysis.");
+    e.status = 401;
+    throw e;
+  }
+  const r = await fetch(`${new URL(req.url).origin}/.netlify/identity/user`, { headers: { authorization: h } });
+  if (!r.ok) {
+    const e = new Error("Your session has expired. Sign in again.");
+    e.status = 401;
+    throw e;
+  }
+  const u = await r.json();
+  return { id: u.id, email: u.email };
+}
+
+/* ---------- Monthly budget guards (protect free credit): whole site + each account ---------- */
+export async function useBudget(user) {
   const cap = Number(env("APIFY_MAX_RUNS_PER_MONTH") || 40);
+  const userCap = Number(env("USER_MAX_RUNS_PER_MONTH") || 10);
   const month = new Date().toISOString().slice(0, 7);
   const s = store();
   const u = (await s.get("usage/apify", { type: "json" })) || {};
   const runs = u.month === month ? u.runs || 0 : 0;
   if (runs >= cap) {
-    const e = new Error(`Monthly data limit reached (${cap} fetches). It resets next month.`);
+    const e = new Error(`StayScout has used this month's data budget (${cap} fetches). It resets on the 1st.`);
     e.status = 429;
     throw e;
   }
+  let mine = 0;
+  const ukey = user ? `usage/users/${slug(user.id)}` : null;
+  if (ukey) {
+    const m = (await s.get(ukey, { type: "json" })) || {};
+    mine = m.month === month ? m.runs || 0 : 0;
+    if (mine >= userCap) {
+      const e = new Error(`You've used your ${userCap} data fetches for this month. They reset on the 1st.`);
+      e.status = 429;
+      throw e;
+    }
+    await s.setJSON(ukey, { month, runs: mine + 1 });
+  }
   await s.setJSON("usage/apify", { month, runs: runs + 1 });
-  return { month, runs: runs + 1, cap };
+  return { month, runs: runs + 1, cap, mine: mine + 1, userCap };
 }
 
 /* ---------- AI (OpenAI-compatible; point AI_BASE_URL at Bifrost later) ---------- */
@@ -140,3 +171,27 @@ export function slimListing(it) {
 }
 
 export const rankScore = (s) => (s.rating || 0) * Math.log10((s.reviews || 0) + 1);
+
+/* ---------- Geo + price helpers ---------- */
+export function km(a, b) {
+  if (!a || !b) return null;
+  const R = 6371, t = (d) => (d * Math.PI) / 180;
+  const dLat = t(b.lat - a.lat), dLng = t(b.lng - a.lng);
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(t(a.lat)) * Math.cos(t(b.lat)) * Math.sin(dLng / 2) ** 2;
+  return Math.round(2 * R * Math.asin(Math.sqrt(h)) * 10) / 10;
+}
+export function parseINR(v) {
+  if (v == null) return null;
+  if (typeof v === "number") return v > 100 && v < 500000 ? Math.round(v) : null;
+  const s = String(v).replace(/,/g, "");
+  const m = s.match(/(\d+(?:\.\d+)?)\s*([kK])?/);
+  if (!m) return null;
+  let n = parseFloat(m[1]) * (m[2] ? 1000 : 1);
+  return n > 100 && n < 500000 ? Math.round(n) : null;
+}
+export const median = (arr) => {
+  const a = arr.filter((x) => typeof x === "number" && isFinite(x)).sort((x, y) => x - y);
+  if (!a.length) return null;
+  const m = Math.floor(a.length / 2);
+  return a.length % 2 ? a[m] : Math.round((a[m - 1] + a[m]) / 2);
+};
