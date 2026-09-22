@@ -26,6 +26,15 @@ export default async (req) => {
       if (q.city.length < 2) return json({ error: "Choose a city." }, 400);
       const key = slug(`${q.city}-${q.state}-${q.country}`);
       const cur = await s.get(`city/${key}`, { type: "json" });
+      // The numbers are ready but the AI summary failed: redo only the AI summary. No data fetch is used.
+      if (b.retryAi && cur?.status === "ready" && cur.result?.ai?.error) {
+        const job = crypto.randomUUID();
+        await s.setJSON(`city/${key}`, { ...cur, status: "analyzing", analyzeAt: Date.now(), job, aiOnly: true });
+        await fetch(`${new URL(req.url).origin}/.netlify/functions/city-analyze-background`, {
+          method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ key, job, aiOnly: true }),
+        }).catch(() => {});
+        return json({ key, status: "analyzing", free: true });
+      }
       if (cur?.status === "ready" && Date.now() - cur.readyAt < WEEK_MS) return json({ key, status: "ready" });
       if (cur && ["running", "collected", "analyzing"].includes(cur.status) && Date.now() - cur.startedAt < 20 * 60 * 1000)
         return json({ key, status: cur.status });
@@ -70,7 +79,7 @@ export default async (req) => {
         await fetch(`${url.origin}/.netlify/functions/city-analyze-background`, {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ key, job: cur.job }),
+          body: JSON.stringify({ key, job: cur.job, aiOnly: !!cur.aiOnly }),
         }).catch(() => {});
         return json({ status: "analyzing", step: "Mapping airports, stations, hospitals and running AI analysis…" });
       }
@@ -81,7 +90,7 @@ export default async (req) => {
         cur.analyzeAt = Date.now();
         await s.setJSON(`city/${key}`, cur);
         await fetch(`${url.origin}/.netlify/functions/city-analyze-background`, {
-          method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ key, job: cur.job }),
+          method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ key, job: cur.job, aiOnly: !!cur.aiOnly }),
         }).catch(() => {});
       }
       return json({ status: "analyzing", step: "Mapping airports, stations, hospitals and running AI analysis…" });

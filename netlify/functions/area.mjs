@@ -26,9 +26,20 @@ export default async (req) => {
     if (!a) return json({ error: "Analyse the city first." }, 404);
     const k = `area/${key}/${area}`;
     const cur = await s.get(k, { type: "json" });
+    const origin = new URL(req.url).origin;
+    const kick = (job) => fetch(`${origin}/.netlify/functions/area-analyze-background`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ key, area, job }),
+    }).catch(() => {});
 
     if (req.method === "POST") {
       if (cur?.status === "ready" && Date.now() - cur.readyAt < WEEK_MS) return json({ status: "ready" });
+      // Reviews already collected but the AI step failed: run only the AI step again. No data fetch is used.
+      if (cur?.status === "failed" && cur.run?.datasetId) {
+        const job = crypto.randomUUID();
+        await s.setJSON(k, { ...cur, status: "analyzing", error: null, analyzeAt: Date.now(), startedAt: Date.now(), job });
+        await kick(job);
+        return json({ status: "analyzing", free: true });
+      }
       if (cur && ["running", "analyzing"].includes(cur.status) && Date.now() - cur.startedAt < 20 * 60 * 1000) return json({ status: cur.status });
       if (!a.topPlaceIds?.length) return json({ error: "No reviewable places in this area." }, 400);
       await useBudget(user);
@@ -44,10 +55,6 @@ export default async (req) => {
     }
 
     if (!cur) return json({ status: "none" });
-    const origin = new URL(req.url).origin;
-    const kick = () => fetch(`${origin}/.netlify/functions/area-analyze-background`, {
-      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ key, area, job: cur.job }),
-    }).catch(() => {});
     if (cur.status === "running") {
       const st = await apifyStatus(cur.run.runId);
       if (["FAILED", "ABORTED", "TIMED-OUT"].includes(st)) {
@@ -56,14 +63,14 @@ export default async (req) => {
       }
       if (st !== "SUCCEEDED") return json({ status: "running", step: "Reading the latest guest reviews…" });
       await s.setJSON(k, { ...cur, status: "analyzing", analyzeAt: Date.now() });
-      await kick();
+      await kick(cur.job);
       return json({ status: "analyzing", step: "AI is finding guest problems and fixes…" });
     }
     if (cur.status === "analyzing") {
-      if (Date.now() - (cur.analyzeAt || 0) > 5 * 60 * 1000) { await s.setJSON(k, { ...cur, analyzeAt: Date.now() }); await kick(); }
+      if (Date.now() - (cur.analyzeAt || 0) > 5 * 60 * 1000) { await s.setJSON(k, { ...cur, analyzeAt: Date.now() }); await kick(cur.job); }
       return json({ status: "analyzing", step: "AI is finding guest problems and fixes…" });
     }
-    if (cur.status === "failed") return json({ status: "failed", error: cur.error || "Analysis failed." });
+    if (cur.status === "failed") return json({ status: "failed", error: cur.error || "Analysis failed.", retryFree: !!cur.run?.datasetId });
     return json({ status: "ready", result: cur.result });
   } catch (e) {
     return json({ error: e.message }, e.status || 500);

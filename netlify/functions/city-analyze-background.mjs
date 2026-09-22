@@ -72,6 +72,19 @@ function areaName(p, city) {
   return cand || p.city || "Other";
 }
 
+function aiInputFor(summary, areas, poi) {
+  return {
+    city: summary,
+    areas: areas.map((a) => ({
+      area: a.name, score: a.score, tier: a.tier, confidence: a.confidence, stays: a.stays, total_reviews: a.reviews,
+      reviews_per_stay: a.reviewsPerStay, avg_rating: a.avgRating, low_rated_pct: a.lowRatedPct,
+      median_price_inr: a.medianPriceINR, price_samples: a.priceSamples, types: a.types,
+      km_to_airport: a.airport?.km ?? null, km_to_railway: a.railway?.km ?? null, km_to_hospital: a.hospital?.km ?? null, km_to_college: a.college?.km ?? null,
+    })),
+    landmarks: poi.filter((p) => ["airport", "railway"].includes(p.type)).slice(0, 8).map((p) => `${p.type}: ${p.name}`),
+  };
+}
+
 export default async (req) => {
   const s = store();
   let key;
@@ -81,6 +94,14 @@ export default async (req) => {
     const cur = await s.get(`city/${key}`, { type: "json" });
     if (!cur || cur.status === "ready") return;
     if (cur.job && body.job !== cur.job) { key = undefined; return; } // only the app's own poller may start this job
+    if (body.aiOnly && cur.result) {
+      const r = cur.result;
+      let ai;
+      try { ai = await aiJSON(SYSTEM, JSON.stringify(aiInputFor(r.summary, r.areas, r.pois || []))); }
+      catch (e) { ai = { headline: "AI analysis is unavailable right now. The numbers below are counted from live data.", error: e.message }; }
+      await s.setJSON(`city/${key}`, { ...cur, status: "ready", aiOnly: false, result: { ...r, ai }, readyAt: cur.readyAt || Date.now() });
+      return;
+    }
     const city = cur.q.city;
 
     const raw = await apifyItems(cur.maps.datasetId, 500);
@@ -179,16 +200,7 @@ export default async (req) => {
       types: Object.entries(places.reduce((m, p) => ((m[p.cat] = (m[p.cat] || 0) + 1), m), {})).sort((a, b) => b[1] - a[1]).slice(0, 6),
     };
 
-    const aiInput = {
-      city: summary,
-      areas: areas.map((a) => ({
-        area: a.name, score: a.score, tier: a.tier, confidence: a.confidence, stays: a.stays, total_reviews: a.reviews,
-        reviews_per_stay: a.reviewsPerStay, avg_rating: a.avgRating, low_rated_pct: a.lowRatedPct,
-        median_price_inr: a.medianPriceINR, price_samples: a.priceSamples, types: a.types,
-        km_to_airport: a.airport?.km ?? null, km_to_railway: a.railway?.km ?? null, km_to_hospital: a.hospital?.km ?? null, km_to_college: a.college?.km ?? null,
-      })),
-      landmarks: poi.filter((p) => ["airport", "railway"].includes(p.type)).slice(0, 8).map((p) => `${p.type}: ${p.name}`),
-    };
+    const aiInput = aiInputFor(summary, areas, poi);
     let ai = null;
     try { ai = await aiJSON(SYSTEM, JSON.stringify(aiInput)); } catch (e) { ai = { headline: "AI analysis is unavailable right now. The numbers below are counted from live data.", error: e.message }; }
 

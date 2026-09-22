@@ -54,7 +54,7 @@ function Body({ r, sel, readyAt }: { r: CityResult; sel: Selection; readyAt?: nu
         <div className="stat"><b className="num">{r.areas.length}</b><span>Localities compared{sm.airbnbListings ? ` · ${sm.airbnbListings} Airbnb listings` : ""}</span></div>
       </section>
       {readyAt && <p className="muted" style={{ marginTop: -8 }}>Analysed {new Date(readyAt).toLocaleString("en-IN", { day: "numeric", month: "short", hour: "numeric", minute: "2-digit" })}. Refreshes after 7 days.</p>}
-      {r.ai?.error && <p className="status info">The AI summary wasn’t available for this analysis. Everything below is counted directly from the data.</p>}
+      {r.ai?.error && <p className="status info">The AI summary wasn’t available for this analysis. Everything below is counted directly from the data. You can retry the summary for free from <Link href="/">Find a location</Link>.</p>}
 
       {ai?.headline && (
         <section className="card stack" style={{ gap: 12, borderColor: "color-mix(in srgb, var(--brand) 45%, var(--line))" }} aria-labelledby="ai-h">

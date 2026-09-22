@@ -16,13 +16,17 @@ export const json = (data, status = 200) =>
     headers: { "content-type": "application/json", "cache-control": "no-store" },
   });
 
+const readVar = (n) => String(Netlify.env.get(n) ?? "").trim().replace(/^["']+|["']+$/g, "").trim();
+/** Reads the first set variable, ignoring stray spaces, line breaks or quotes pasted with the value. */
 export const env = (...names) => {
   for (const n of names) {
-    const v = Netlify.env.get(n);
+    const v = readVar(n);
     if (v) return v;
   }
   return "";
 };
+/** Every distinct value found under these names, so an old key left behind doesn't block a new one. */
+export const envAll = (...names) => [...new Set(names.map(readVar).filter(Boolean))];
 
 export const slug = (s) =>
   String(s || "").toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 120);
@@ -108,33 +112,97 @@ export async function useBudget(user) {
   return { month, runs: runs + 1, cap, mine: mine + 1, userCap };
 }
 
-/* ---------- AI (OpenAI-compatible; point AI_BASE_URL at Bifrost later) ---------- */
-export async function aiJSON(system, user) {
-  const base = env("AI_BASE_URL") || "https://generativelanguage.googleapis.com/v1beta/openai";
-  const key = env("AI_API_KEY", "GEMINI_API_KEY", "GemAPIKey", "GEMAPIKEY");
-  const model = env("AI_MODEL") || "gemini-2.5-flash";
-  if (!key) throw new Error("AI key missing. Add GEMINI_API_KEY in Netlify → Environment variables.");
-  const r = await fetch(`${base.replace(/\/$/, "")}/chat/completions`, {
+/* ---------- AI (OpenAI-compatible) ----------
+ * Order: AI_BASE_URL gateway (e.g. Bifrost) if set, otherwise Google Gemini; then Groq as a backup.
+ * Keys never leave the server. Detailed provider errors go to the function log; people see a plain sentence.
+ */
+const errText = (body) => {
+  const b = Array.isArray(body) ? body[0] : body;
+  return String(b?.error?.message || b?.message || b?.error || JSON.stringify(body || {}).slice(0, 200));
+};
+
+async function chat(p, key, model, system, user, jsonMode) {
+  const r = await fetch(`${p.base.replace(/\/$/, "")}/chat/completions`, {
     method: "POST",
     headers: { "content-type": "application/json", authorization: `Bearer ${key}` },
     body: JSON.stringify({
       model,
       temperature: 0.3,
-      response_format: { type: "json_object" },
-      messages: [
-        { role: "system", content: system },
-        { role: "user", content: user },
-      ],
+      ...(jsonMode ? { response_format: { type: "json_object" } } : {}),
+      messages: [{ role: "system", content: system }, { role: "user", content: user }],
     }),
   });
   const body = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(`AI request failed (${r.status}): ${body?.error?.message || JSON.stringify(body).slice(0, 200)}`);
-  const text = body?.choices?.[0]?.message?.content || "{}";
-  try {
-    return JSON.parse(text.replace(/^```json\s*|\s*```$/g, ""));
-  } catch {
-    throw new Error("AI returned an unreadable answer. Try again.");
+  if (!r.ok) {
+    const e = new Error(errText(body));
+    e.status = r.status;
+    throw e;
   }
+  return String(body?.choices?.[0]?.message?.content || "");
+}
+
+function parseJSON(text) {
+  const t = text.replace(/^\s*```(?:json)?\s*|\s*```\s*$/g, "").trim();
+  try { return JSON.parse(t); } catch { /* try the outermost object */ }
+  const m = t.match(/\{[\s\S]*\}/);
+  if (m) { try { return JSON.parse(m[0]); } catch { /* fall through */ } }
+  const e = new Error("unreadable answer");
+  e.status = 422;
+  throw e;
+}
+
+const keyProblem = (e) => e.status === 401 || e.status === 403 || /api key|api_key|unauthori[sz]ed|invalid.*key|permission denied/i.test(e.message || "");
+
+export async function aiJSON(system, user) {
+  const providers = [];
+  const geminiKeys = envAll("AI_API_KEY", "GEMINI_API_KEY", "Gemini", "GEMINI", "gemini", "GeminiAPIKey", "GemAPIKey", "GEMAPIKEY", "GEMINI_KEY");
+  const gateway = env("AI_BASE_URL");
+  if (gateway) providers.push({ name: "AI gateway", base: gateway, keys: geminiKeys, models: [env("AI_MODEL") || "gemini-2.5-flash"] });
+  else if (geminiKeys.length) providers.push({ name: "Gemini", base: "https://generativelanguage.googleapis.com/v1beta/openai", keys: geminiKeys, models: [env("AI_MODEL") || "gemini-2.5-flash"] });
+  const groqKeys = envAll("GROQ_API_KEY", "gROQcLOUD", "GROQCLOUD", "GroqCloud", "groqcloud", "GROQ");
+  if (groqKeys.length) providers.push({ name: "Groq", base: "https://api.groq.com/openai/v1", keys: groqKeys, models: [env("GROQ_MODEL") || "openai/gpt-oss-120b", "llama-3.3-70b-versatile"] });
+  if (!providers.length) {
+    console.error("[ai] no AI key configured");
+    throw new Error("AI analysis isn’t set up yet: no AI key is configured for StayScout.");
+  }
+
+  const problems = [];
+  for (const p of providers) {
+    // Several keys can be saved for the same provider (an old one left behind, a new one added): try each.
+    for (let i = 0; i < p.keys.length; i++) {
+      const key = p.keys[i];
+      let badKey = false;
+      for (const model of p.models) {
+        try {
+          let text;
+          try { text = await chat(p, key, model, system, user, true); }
+          catch (e) {
+            if (e.status === 400 && /response_format|json_object|json mode/i.test(e.message)) text = await chat(p, key, model, system, user, false);
+            else throw e;
+          }
+          return parseJSON(text);
+        } catch (e) {
+          console.error(`[ai] ${p.name} key ${i + 1}/${p.keys.length} ${model} failed (${e.status || "network"}): ${String(e.message).slice(0, 300)}`);
+          problems.push({ name: p.name, e });
+          if (keyProblem(e)) { badKey = true; break; } // this key fails for every model; try the next key
+        }
+      }
+      if (!badKey) break; // the key worked but the models didn't: another key won't help
+    }
+  }
+  const keyFail = problems.filter((x) => keyProblem(x.e)).map((x) => x.name);
+  const allKeysBad = providers.every((p) => keyFail.filter((n) => n === p.name).length >= p.keys.length);
+  const busy = problems.some((x) => x.e.status === 429);
+  const err = new Error(
+    keyFail.length && allKeysBad
+      ? `AI analysis is unavailable: the AI provider rejected StayScout’s key (${[...new Set(keyFail)].join(" and ")}).`
+      : busy
+        ? "AI analysis is busy right now (rate limit). Try again in a minute."
+        : "AI analysis didn’t work this time. Try again in a minute.",
+  );
+  err.status = 502;
+  err.aiFailure = true;
+  throw err;
 }
 
 /* ---------- Listing normalisation ---------- */

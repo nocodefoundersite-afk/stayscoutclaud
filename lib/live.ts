@@ -9,7 +9,7 @@ import { accessToken } from "./auth";
 import { COUNTRY, cityKey, type AreaResult, type CityResult } from "./data";
 
 export type JobStatus = "idle" | "checking" | "none" | "running" | "analyzing" | "ready" | "failed" | "error";
-export type Job<T> = { status: JobStatus; step?: string; error?: string; result?: T; readyAt?: number };
+export type Job<T> = { status: JobStatus; step?: string; error?: string; result?: T; readyAt?: number; retryFree?: boolean };
 
 class ApiError extends Error {
   constructor(message: string, public status: number) { super(message); }
@@ -57,7 +57,7 @@ function useJob<T>(id: string | null, getUrl: string, postUrl: string, postBody:
       if (live.current !== mine) return;
       if (j.status === "ready") { ready.set(mine, { result: j.result, readyAt: j.readyAt }); setJob({ status: "ready", result: j.result as T, readyAt: j.readyAt }); return; }
       if (j.status === "none") { setJob({ status: "none" }); return; }
-      if (j.status === "failed") { setJob({ status: "failed", error: j.error }); return; }
+      if (j.status === "failed") { setJob({ status: "failed", error: j.error, retryFree: !!j.retryFree }); return; }
       setJob({ status: j.status, step: j.step });
       timer.current = window.setTimeout(poll, POLL_MS);
     } catch (e) {
@@ -78,13 +78,13 @@ function useJob<T>(id: string | null, getUrl: string, postUrl: string, postBody:
     return () => window.clearTimeout(timer.current);
   }, [id, poll]);
 
-  const start = useCallback(async () => {
+  const startWith = useCallback(async (extra?: Record<string, unknown>) => {
     if (!id) return;
     setStarting(true);
     setStartError(null);
     try {
-      await postJSON(postUrl, JSON.parse(postBody));
-      setJob({ status: "running", step: "Starting…" });
+      const res = await postJSON(postUrl, { ...JSON.parse(postBody), ...(extra || {}) });
+      setJob({ status: res?.status === "analyzing" ? "analyzing" : "running", step: res?.status === "analyzing" ? "Running the AI step again…" : "Starting…" });
       timer.current = window.setTimeout(poll, 2500);
     } catch (e) {
       const err = e as ApiError;
@@ -94,7 +94,8 @@ function useJob<T>(id: string | null, getUrl: string, postUrl: string, postBody:
     }
   }, [id, postUrl, postBody, poll]);
 
-  return { job, start, starting, startError, retry: poll };
+  const start = useCallback(() => startWith(), [startWith]);
+  return { job, start, startWith, starting, startError, retry: poll };
 }
 
 /** A city analysis: localities ranked with prices, ratings and nearby landmarks. */
@@ -106,7 +107,9 @@ export function useCity(state: string, city: string) {
     "/api/city",
     JSON.stringify({ country: COUNTRY, state, city }),
   );
-  return { key, ...r };
+  /** Re-runs only the AI summary for a ready city whose summary failed. Uses no data fetch. */
+  const retryAi = useCallback(() => r.startWith({ retryAi: true }), [r]);
+  return { key, ...r, retryAi };
 }
 
 /** Guest-review analysis for one locality: problems, fixes and listing lines. */

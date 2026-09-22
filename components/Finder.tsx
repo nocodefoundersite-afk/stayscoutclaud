@@ -286,11 +286,22 @@ export default function Finder() {
             <button type="button" className="btn btn-secondary" onClick={city.retry}><RefreshCw aria-hidden="true" />Try again</button>
           </div>
         ) : result && (view === "areas" || !area) ? (
+          <>
+          {result.ai?.error && (
+            <div className="status warn row" role="note" style={{ justifyContent: "space-between", marginBottom: 16 }}>
+              <span>{result.ai.error} The rankings, prices and distances below are still live.</span>
+              <button type="button" className="btn btn-secondary" onClick={city.retryAi} disabled={city.starting}>
+                {city.starting ? <Loader2 className="spin" aria-hidden="true" /> : <RefreshCw aria-hidden="true" />}Retry AI summary (free)
+              </button>
+            </div>
+          )}
+          {city.startError && <p className="status err" role="alert" style={{ marginBottom: 16 }}>{city.startError.message}</p>}
           <AreasTable
             result={result} city={sel.city} type={type} rows={rows} sort={sort} setSort={setSort} typeFound={typeFound}
             readyAt={city.job.readyAt} onPick={pickLocality} headingRef={resultsRef} isSaved={isSaved} onSave={toggleSave}
             onAllTypes={() => update({ type: "All" })} onReset={() => update({ minPrice: "", maxPrice: "", minRating: "any" })}
           />
+          </>
         ) : result && area && view === "properties" ? (
           <Properties
             result={result} area={area} type={type} list={areaPlaces.list} noPrice={areaPlaces.noPrice} openProp={openProp} setOpenProp={setOpenProp} headingRef={resultsRef}

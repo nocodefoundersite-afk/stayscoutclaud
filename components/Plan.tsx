@@ -208,12 +208,16 @@ export function ReviewPanel({ review, areaName, signedIn }: { review: ReturnType
     <div className="card stack" style={{ gap: 12 }}>
       <h3><MessageSquareText size={18} aria-hidden="true" style={{ verticalAlign: -3, color: "var(--brand)" }} /> Find out what guests complain about in {areaName}</h3>
       {st === "failed" && <p className="status err">{review.job.error || "The last review analysis didn’t finish."}</p>}
-      <p style={{ color: "var(--ink-2)" }}>We read the newest Google reviews of the top stays here, then list the problems, fixes, costs and lines for your listing. Uses 1 of your monthly data fetches.</p>
+      {st === "failed" && review.job.retryFree ? (
+        <p style={{ color: "var(--ink-2)" }}>The guest reviews for {areaName} are already collected, so trying again only re-runs the AI step. It doesn’t use a data fetch.</p>
+      ) : (
+        <p style={{ color: "var(--ink-2)" }}>We read the newest Google reviews of the top stays here, then list the problems, fixes, costs and lines for your listing. Uses 1 of your monthly data fetches.</p>
+      )}
       {review.startError && <p className="status err" role="alert">{review.startError.message}</p>}
       <div className="row">
         {signedIn ? (
           <button type="button" className="btn btn-primary" onClick={review.start} disabled={review.starting}>
-            {review.starting ? <Loader2 className="spin" aria-hidden="true" /> : <MessageSquareText aria-hidden="true" />}{review.starting ? "Starting…" : "Analyse guest reviews"}
+            {review.starting ? <Loader2 className="spin" aria-hidden="true" /> : <MessageSquareText aria-hidden="true" />}{review.starting ? "Starting…" : st === "failed" && review.job.retryFree ? "Try again (free)" : st === "failed" ? "Try again" : "Analyse guest reviews"}
           </button>
         ) : (
           <Link href="/login/?next=/" className="btn btn-primary"><LogIn aria-hidden="true" />Sign in to analyse reviews</Link>
