@@ -1,0 +1,12 @@
+# Copyright (c) 2026 Tanshu Singh / StayScout. All rights reserved. Proprietary and confidential.
+[build]
+  publish = "."
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Frame-Options = "DENY"
+    X-Content-Type-Options = "nosniff"
+    Referrer-Policy = "strict-origin-when-cross-origin"
+    Strict-Transport-Security = "max-age=31536000; includeSubDomains"
+    X-Robots-Tag = "noai, noimageai"
