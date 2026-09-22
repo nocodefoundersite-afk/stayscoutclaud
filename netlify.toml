@@ -1,6 +1,10 @@
 # Copyright (c) 2026 Tanshu Singh / StayScout. All rights reserved. Proprietary and confidential.
 [build]
-  publish = "."
+  publish = "public"
+
+[functions]
+  directory = "netlify/functions"
+  node_bundler = "esbuild"
 
 [[headers]]
   for = "/*"

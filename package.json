@@ -1,0 +1,10 @@
+{
+  "name": "stayscout",
+  "private": true,
+  "type": "module",
+  "description": "StayScout (c) 2026 Tanshu Singh. Proprietary and confidential.",
+  "dependencies": {
+    "@netlify/blobs": "^11.1.0",
+    "@netlify/database": "^2.0.1"
+  }
+}
