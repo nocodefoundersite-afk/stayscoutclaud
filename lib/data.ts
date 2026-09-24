@@ -55,17 +55,46 @@ export const STATES: Record<string, string[]> = {
 /* ---------------- live result shapes ---------------- */
 export type Near = { name: string; km: number | null } | null;
 
+export type Facility = { name: string; n: number; pct: number };
+
 export type LiveArea = {
   id: string; name: string; lat: number; lng: number; radiusKm: number;
   stays: number; reviews: number; reviewsPerStay: number; avgRating: number | null; lowRatedPct: number;
   medianPriceINR: number | null; priceSamples: number; airbnbNearby: number; types: string[];
   airport: Near; railway: Near; hospital: Near; college: Near; bus: Near;
-  score: number; confidence: "High" | "Medium" | "Low"; tier: "best" | "medium" | "worst";
+  score: number; confidence: "High" | "Medium" | "Low"; tier: "best" | "medium" | "worst"; rank?: number; of?: number;
+  /** Counted from the 1-5 star breakdown rather than estimated from the average. */
+  unhappyPct?: number | null; reviewsSeen?: number;
+  airbnbMedianINR?: number | null; otaMedianINR?: number | null; otaSamples?: number;
+  avgStars?: number | null; open24?: number;
+  facilitiesOf?: number; facilities?: Facility[];
+  themes?: { title: string; n: number }[];
 };
 
+export type OtaPrice = { site: string; price: number; official?: boolean; url?: string };
+export type Rival = { name: string; rating: number | null; reviews: number; price: number | null; note: string };
+
 export type Place = {
-  id: string; name: string; cat: string; rating: number | null; reviews: number;
-  price?: number | null; priceLabel: string; lat: number; lng: number; url: string; area: string; amenities?: string[];
+  id: string; name: string; cat: string; cats?: string[]; rating: number | null; reviews: number;
+  price?: number | null; priceLabel: string; priceFrom?: "google" | "ota" | null;
+  lat: number; lng: number; url: string; area: string;
+  amenities?: string[];
+  /** Facilities Google explicitly says the place does NOT have. */
+  missing?: string[];
+  amenityGroups?: Record<string, string[]>;
+  stars?: number | null; desc?: string;
+  ota?: OtaPrice[]; otaPrice?: number | null; rivals?: Rival[];
+  spread?: { one: number; two: number; three: number; four: number; five: number; total: number; unhappyPct: number } | null;
+  unhappyPct?: number | null; themes?: string[];
+  questions?: number; images?: number; open24?: boolean; phone?: string; website?: string;
+};
+
+export type AirbnbListing = {
+  name: string; lat: number; lng: number; price: number | null; rating: number | null; reviews: number;
+  url: string; roomType?: string; source?: string;
+  sub?: { cleanliness: number | null; location: number | null; value: number | null; accuracy: number | null; checkin: number | null; communication: number | null };
+  amenities?: string[]; capacity?: number | null; bedrooms?: number | null; beds?: number | null; baths?: number | null;
+  superhost?: boolean; host?: string;
 };
 
 export type CityAI = {
@@ -75,17 +104,28 @@ export type CityAI = {
   pricing_by_location?: { location: string; areas: string[]; price_range_inr: string; who_stays: string; advice: string }[];
   demand_drivers?: string[];
   opportunities?: string[];
+  must_match?: string[];
+  channel_advice?: string;
   verdict?: string;
   error?: string;
 };
 
 export type CityResult = {
-  summary: { city: string; state: string; stays: number; airbnbListings: number; avgRating: number | null; medianPriceINR: number | null; priceSamples: number; types: [string, number][] };
+  summary: {
+    city: string; state: string; stays: number; airbnbListings: number; avgRating: number | null; medianPriceINR: number | null;
+    priceSamples: number; types: [string, number][];
+    skippedNonStays?: number; landmarksAvailable?: boolean; convertedPrices?: number; usdRate?: number;
+    /** How much of the picture each source filled in, so a thin city reads as thin rather than empty. */
+    facilitiesFrom?: number; otaFrom?: number; reviewsSeen?: number; reviewsSampled?: number;
+    airbnbWithAmenities?: number; starsFrom?: number;
+    cityFacilities?: Facility[]; cityFacilitiesOf?: number;
+  };
   areas: LiveArea[];
   ai: CityAI | null;
   places: Place[];
-  airbnb: { name: string; lat: number; lng: number; price: number | null; rating: number | null; reviews: number; url: string }[];
+  airbnb: AirbnbListing[];
   pois: { type: string; name: string; lat: number; lng: number }[];
+  poisAvailable?: boolean;
   center: { lat: number; lng: number };
 };
 
@@ -138,6 +178,21 @@ export function typeOf(cat: string): PropertyType | null {
 export const placesIn = (r: CityResult, area: LiveArea, type: TypeFilter = "All") =>
   r.places.filter((p) => p.area === area.name && (type === "All" || typeOf(p.cat) === type));
 
+/** Straight-line distance in km. */
+export function kmBetween(a: { lat: number; lng: number }, b: { lat: number; lng: number }) {
+  const R = 6371, t = (d: number) => (d * Math.PI) / 180;
+  const dLat = t(b.lat - a.lat), dLng = t(b.lng - a.lng);
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(t(a.lat)) * Math.cos(t(b.lat)) * Math.sin(dLng / 2) ** 2;
+  return Math.round(2 * R * Math.asin(Math.sqrt(h)) * 10) / 10;
+}
+
+/** Airbnb listings within 3 km of a locality: real per-night prices Google Maps often doesn't show. */
+export const airbnbIn = (r: CityResult, area: LiveArea, withinKm = 3) =>
+  (r.airbnb || []).filter((x) => isFinite(x.lat) && isFinite(x.lng) && kmBetween(area, x) <= withinKm);
+
+/** Landmarks come from OpenStreetMap; when that lookup fails we say so instead of "none nearby". */
+export const hasLandmarks = (r: CityResult) => r.poisAvailable !== false && (r.summary.landmarksAvailable ?? (r.pois?.length ?? 0) > 0);
+
 export const rankScore = (p: Place) => (p.rating || 0) * Math.log10((p.reviews || 0) + 1);
 
 /** Numbers for one area, counted only from properties of the chosen type. */
@@ -157,15 +212,46 @@ export function areaStats(r: CityResult, area: LiveArea, type: TypeFilter) {
   };
 }
 
-/** Share of stays offering each amenity (only stays that report amenities count). */
-export function amenityCoverage(places: Place[]) {
-  const withData = places.filter((p) => p.amenities && p.amenities.length);
-  const counts = new Map<string, number>();
-  for (const p of withData) for (const a of new Set(p.amenities)) counts.set(a, (counts.get(a) || 0) + 1);
+/** Nightly price by booking channel, so an owner can see where the money actually is. */
+export function priceChannels(r: CityResult, area?: LiveArea) {
+  const list = area ? placesIn(r, area) : r.places;
+  const near = area ? airbnbIn(r, area) : r.airbnb || [];
+  const google = median(list.filter((p) => p.priceFrom !== "ota").map(priceOf));
+  const ota = median(list.flatMap((p) => (p.ota || []).map((o) => o.price)));
+  const air = median(near.map((x) => x.price));
   return {
-    total: withData.length,
-    items: [...counts.entries()].map(([name, n]) => ({ name, count: n, pct: Math.round((n / withData.length) * 100) })).sort((a, b) => b.pct - a.pct),
+    google, googleN: list.filter((p) => p.priceFrom !== "ota" && priceOf(p) != null).length,
+    ota, otaN: list.reduce((t, p) => t + (p.ota?.length || 0), 0),
+    airbnb: air, airbnbN: near.filter((x) => x.price != null).length,
   };
+}
+
+/** Facilities across a set of stays, counting Airbnb listings alongside Google's. */
+export function facilityCoverage(places: Place[], airbnb: AirbnbListing[] = []) {
+  const rows = [
+    ...places.filter((p) => p.amenities?.length).map((p) => p.amenities as string[]),
+    ...airbnb.filter((x) => x.amenities?.length).map((x) => x.amenities as string[]),
+  ];
+  const counts = new Map<string, number>();
+  for (const list of rows) for (const a of new Set(list.map((x) => x.trim()).filter(Boolean))) counts.set(a, (counts.get(a) || 0) + 1);
+  const items: Facility[] = [...counts.entries()]
+    .map(([name, n]) => ({ name, n, pct: Math.round((n / Math.max(1, rows.length)) * 100) }))
+    .sort((a, b) => b.pct - a.pct || a.name.localeCompare(b.name));
+  return {
+    of: rows.length,
+    items,
+    /** Under 40%: few competitors offer it, so it is a way to stand out. */
+    gaps: items.filter((f) => f.pct < 40 && f.n >= 2).slice(0, 12),
+    /** Over 80%: guests expect it, so a new property has to match it. */
+    stakes: items.filter((f) => f.pct >= 80).slice(0, 12),
+  };
+}
+
+/** Competitors Google itself lists next to each stay, with how their price compares. */
+export function rivalsIn(places: Place[]) {
+  const seen = new Map<string, Rival>();
+  for (const p of places) for (const r of p.rivals || []) if (r.name && !seen.has(r.name)) seen.set(r.name, r);
+  return [...seen.values()].sort((a, b) => (b.reviews || 0) - (a.reviews || 0));
 }
 
 export const tierLabel = (t: LiveArea["tier"]) => (t === "best" ? "Strong" : t === "medium" ? "Mixed" : "Weak");

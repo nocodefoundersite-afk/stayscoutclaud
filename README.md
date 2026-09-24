@@ -24,6 +24,25 @@ Where to open a stay, what to charge, what to offer and what to fix, from live G
 | `APIFY_MAX_RUNS_PER_MONTH` | no | Whole-site monthly limit, default 40 |
 | `USER_MAX_RUNS_PER_MONTH` | no | Per-account monthly limit, default 10 |
 | `AI_BASE_URL` / `AI_API_KEY` / `AI_MODEL` | no | Point at the Bifrost gateway (OpenAI-compatible) once it's hosted |
+| `MAPS_PER_SEARCH` | no | Stays fetched per search term, default 30 (12 terms) |
+| `MAPS_REVIEWS` | no | Reviews read per stay, default 5; set 0 to skip reviews |
+| `AIRBNB_RESULTS` | no | Airbnb listings per city, default 300 |
+| `USD_INR` | no | Rate used to convert foreign prices, default 88 |
+
+## What a city costs
+
+Apify charges per unit, so the three variables above set the bill:
+
+| Unit | Price | Default per city |
+|---|---|---|
+| Scraped place | $4.00 / 1,000 | 12 terms × 30 ≈ 360 before de-duplication |
+| Place detail page | $2.00 / 1,000 | same count — this is what carries facilities |
+| Review | $0.50 / 1,000 | 5 per stay |
+| Airbnb listing | $1.25 / 1,000 | 300 |
+
+That is roughly **$2 a city**. `scrapePlaceDetailPage` is the setting that matters: without it Google
+returns no facilities, no booking-site prices, no star class and no rating breakdown, and the pages
+have almost nothing to show. Lower `MAPS_PER_SEARCH` or set `MAPS_REVIEWS=0` to spend less.
 
 ## Build
 `npm run build` writes the site to `out/`. Netlify settings live in `netlify.toml`.

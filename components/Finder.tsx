@@ -10,6 +10,7 @@ import {
 import {
   PROPERTY_TYPES, STATES, COUNTRY, inr, areaStats, placesIn, priceOf, rankScore, nearLine, tierLabel,
   type CityResult, type LiveArea, type Place, type TypeFilter,
+  airbnbIn, hasLandmarks,
 } from "@/lib/data";
 import { KEYS, useLocal, EMPTY_SELECTION, savedId, type Selection, type SavedArea } from "@/lib/storage";
 import { useCity } from "@/lib/live";
@@ -60,7 +61,8 @@ export default function Finder() {
 
   const exploring = phase === "explore";
   const city = useCity(exploring ? sel.state : "", exploring ? sel.city : "");
-  const result = city.job.status === "ready" ? (city.job.result as CityResult) : null;
+  // Kept even while a refresh runs, so the page shows the last analysis instead of going blank.
+  const result = (city.job.result as CityResult | undefined) ?? null;
 
   useEffect(() => {
     if (!ready) return;
@@ -268,7 +270,7 @@ export default function Finder() {
         {st === "checking" || st === "idle" ? (
           <div className="card empty" aria-busy="true">
             <Loader2 className="spin" aria-hidden="true" />
-            <h2 id="results-h" ref={resultsRef} tabIndex={-1} className={s.rh}>Looking up {sel.city}…</h2>
+            <h1 id="results-h" ref={resultsRef} tabIndex={-1} className={s.rh}>Looking up {sel.city}…</h1>
             <p className="muted">Checking for an analysis from the last 7 days.</p>
           </div>
         ) : st === "none" || st === "failed" ? (
@@ -276,17 +278,23 @@ export default function Finder() {
             cityName={sel.city} signedIn={!!user} failedError={st === "failed" ? city.job.error : undefined}
             starting={city.starting} startError={city.startError} onStart={city.start} headingRef={resultsRef}
           />
-        ) : st === "running" || st === "analyzing" ? (
+        ) : (st === "running" || st === "analyzing") && !result ? (
           <Progress cityName={sel.city} step={city.job.step} headingRef={resultsRef} />
         ) : st === "error" ? (
           <div className="card empty">
             <AlertTriangle aria-hidden="true" />
-            <h2 id="results-h" ref={resultsRef} tabIndex={-1} className={s.rh}>Couldn’t load {sel.city}</h2>
+            <h1 id="results-h" ref={resultsRef} tabIndex={-1} className={s.rh}>Couldn’t load {sel.city}</h1>
             <p className="muted">{city.job.error}</p>
             <button type="button" className="btn btn-secondary" onClick={city.retry}><RefreshCw aria-hidden="true" />Try again</button>
           </div>
         ) : result && (view === "areas" || !area) ? (
           <>
+          {(st === "running" || st === "analyzing") && (
+            <p className="status info row" role="status" style={{ marginBottom: 16 }}>
+              <Loader2 className="spin" aria-hidden="true" />
+              <span>Fetching fresh data for {sel.city}{city.job.step ? ` — ${city.job.step.replace(/[.…]+$/, "")}` : ""}. The results below are from the last analysis until the new one is ready.</span>
+            </p>
+          )}
           {result.ai?.error && (
             <div className="status warn row" role="note" style={{ justifyContent: "space-between", marginBottom: 16 }}>
               <span>{result.ai.error} The rankings, prices and distances below are still live.</span>
@@ -300,6 +308,7 @@ export default function Finder() {
             result={result} city={sel.city} type={type} rows={rows} sort={sort} setSort={setSort} typeFound={typeFound}
             readyAt={city.job.readyAt} onPick={pickLocality} headingRef={resultsRef} isSaved={isSaved} onSave={toggleSave}
             onAllTypes={() => update({ type: "All" })} onReset={() => update({ minPrice: "", maxPrice: "", minRating: "any" })}
+            onRefresh={() => city.startWith({ force: true })} refreshing={city.starting || st === "running" || st === "analyzing"}
           />
           </>
         ) : result && area && view === "properties" ? (
@@ -330,9 +339,9 @@ function Analyse(props: {
   return (
     <div className="card stack" style={{ gap: 16 }}>
       <Radar aria-hidden="true" style={{ width: 40, height: 40, color: "var(--accent-text)" }} />
-      <h2 id="results-h" ref={props.headingRef} tabIndex={-1} className={s.rh}>
+      <h1 id="results-h" ref={props.headingRef} tabIndex={-1} className={s.rh}>
         {props.failedError ? `The last analysis of ${cityName} didn’t finish` : `${cityName} hasn’t been analysed this week`}
-      </h2>
+      </h1>
       {props.failedError && <p className="status err">{props.failedError}</p>}
       <p style={{ color: "var(--ink-2)", maxWidth: "62ch" }}>
         We’ll collect hotels, homestays, resorts, hostels and villas from Google Maps, up to 20 Airbnb listings, and nearby airports, stations,
@@ -373,7 +382,7 @@ function Progress({ cityName, step, headingRef }: { cityName: string; step?: str
   return (
     <div className="card stack" aria-busy="true" style={{ gap: 16 }}>
       <div className="row"><Loader2 className="spin" aria-hidden="true" style={{ width: 28, height: 28, color: "var(--accent-text)" }} />
-        <h2 id="results-h" ref={headingRef} tabIndex={-1} className={s.rh}>Analysing {cityName}</h2></div>
+        <h1 id="results-h" ref={headingRef} tabIndex={-1} className={s.rh}>Analysing {cityName}</h1></div>
       <p role="status" aria-live="polite" style={{ fontWeight: 600 }}>{step || "Working…"}</p>
       <div className={s.track} aria-hidden="true"><i /></div>
       <p className="muted">{Math.floor(sec / 60)}:{String(sec % 60).padStart(2, "0")} on this page. This usually takes 3 to 6 minutes. You can leave; the analysis keeps going and will be here when you come back.</p>
@@ -386,6 +395,7 @@ function AreasTable(props: {
   result: CityResult; city: string; type: TypeFilter; rows: { a: LiveArea; st: ReturnType<typeof areaStats> }[]; sort: Sort; setSort: (s: Sort) => void;
   typeFound: boolean; readyAt?: number; onPick: (id: string) => void; headingRef: React.RefObject<HTMLHeadingElement | null>;
   isSaved: (a: LiveArea) => boolean; onSave: (a: LiveArea) => void; onAllTypes: () => void; onReset: () => void;
+  onRefresh: () => void; refreshing: boolean;
 }) {
   const { result, city, type, rows, sort, setSort } = props;
   const sm = result.summary;
@@ -393,16 +403,21 @@ function AreasTable(props: {
     <div className="stack">
       <div className="card-h" style={{ marginBottom: 0 }}>
         <div>
-          <h2 id="results-h" ref={props.headingRef} tabIndex={-1} className={s.rh}>Best localities in {city}</h2>
+          <h1 id="results-h" ref={props.headingRef} tabIndex={-1} className={s.rh}>Best localities in {city}</h1>
           <p className="muted">
             {type === "All" ? "All stays" : `${type}s only`} · {sm.stays} stays from Google Maps{sm.airbnbListings ? ` and ${sm.airbnbListings} Airbnb listings` : ""}
             {props.readyAt ? ` · updated ${new Date(props.readyAt).toLocaleDateString("en-IN", { day: "numeric", month: "short" })}` : ""}
           </p>
         </div>
-        <div className="seg" role="group" aria-label="Sort by" style={{ minWidth: 300 }}>
-          <button type="button" aria-pressed={sort === "score"} onClick={() => setSort("score")}>Highest score</button>
-          <button type="button" aria-pressed={sort === "price"} onClick={() => setSort("price")}>Lowest price</button>
-          <button type="button" aria-pressed={sort === "reviews"} onClick={() => setSort("reviews")}>Most reviews</button>
+        <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
+          <div className="seg" role="group" aria-label="Sort by" style={{ minWidth: 300 }}>
+            <button type="button" aria-pressed={sort === "score"} onClick={() => setSort("score")}>Highest score</button>
+            <button type="button" aria-pressed={sort === "price"} onClick={() => setSort("price")}>Lowest price</button>
+            <button type="button" aria-pressed={sort === "reviews"} onClick={() => setSort("reviews")}>Most reviews</button>
+          </div>
+          <button type="button" className="btn btn-secondary" onClick={props.onRefresh} disabled={props.refreshing} title="Fetch this city again from Google Maps and Airbnb. Uses one of your monthly data fetches.">
+            {props.refreshing ? <Loader2 className="spin" aria-hidden="true" /> : <RefreshCw aria-hidden="true" />}Refresh data
+          </button>
         </div>
       </div>
       {result.ai?.headline && !result.ai.error && <p className={s.headline}>{result.ai.headline}</p>}
@@ -438,8 +453,14 @@ function AreasTable(props: {
                     <div className="muted" style={{ fontSize: 12 }}>{tierLabel(a.tier)} · {a.confidence} confidence</div>
                   </td>
                   <td className="num" data-label="Typical nightly price">{st.price ? inr(st.price) : <span className="muted">No price data</span>}</td>
-                  <td className="num" data-label="Guest rating" style={{ whiteSpace: "nowrap" }}>{st.rating ? <><Star size={14} aria-hidden="true" style={{ verticalAlign: -2, color: "var(--brand)" }} /> {st.rating.toFixed(1)}<span className="sr"> out of five</span></> : "—"}</td>
-                  <td className="num" data-label="Reviews">{st.reviews.toLocaleString("en-IN")}</td>
+                  <td className="num" data-label="Guest rating" style={{ whiteSpace: "nowrap" }}>
+                    {st.rating ? <><Star size={14} aria-hidden="true" style={{ verticalAlign: -2, color: "var(--brand)" }} /> {st.rating.toFixed(1)}<span className="sr"> out of five</span></> : "—"}
+                    {a.unhappyPct != null && <div className="muted" style={{ fontSize: 12 }}>{a.unhappyPct}% unhappy</div>}
+                  </td>
+                  <td className="num" data-label="Reviews">
+                    {st.reviews.toLocaleString("en-IN")}
+                    {a.facilitiesOf ? <div className="muted" style={{ fontSize: 12 }}>{a.facilities?.length || 0} facilities</div> : null}
+                  </td>
                   <td className="rt-full">
                     <div className="row" style={{ flexWrap: "nowrap", justifyContent: "flex-end", gap: 4 }}>
                       <button className="btn btn-ghost" style={{ padding: 0, width: 44 }} onClick={() => props.onSave(a)} aria-label={props.isSaved(a) ? `Remove ${a.name} from saved` : `Save ${a.name}`} aria-pressed={props.isSaved(a)}>
@@ -454,7 +475,19 @@ function AreasTable(props: {
           </table>
         </div>
       )}
-      <p className="muted">Scores compare localities within {city}: guest demand (35%), room for new supply (20%), guest problems a better stay can fix (25%) and access to airports, stations, hospitals and colleges (20%). Research, not investment advice.</p>
+      <div className="muted stack" style={{ gap: 6 }}>
+        <p>Scores compare localities within {city}: guest demand, room for new supply, guest problems a better stay can fix, and access to airports, stations, hospitals and colleges{result.summary.landmarksAvailable === false ? " (landmarks were unavailable for this run, so access wasn’t counted)" : ""}. Research, not investment advice.</p>
+        {!!result.summary.convertedPrices && (
+          <p>Google shows {result.summary.convertedPrices} of these stays in US dollars; those prices are converted at ₹{result.summary.usdRate} to $1.</p>
+        )}
+        {!!result.summary.skippedNonStays && <p>{result.summary.skippedNonStays} search results that weren’t places to stay were left out.</p>}
+        <p>
+          Built on {result.summary.stays} stays{result.summary.airbnbListings ? ` and ${result.summary.airbnbListings} Airbnb listings` : ""}
+          {result.summary.facilitiesFrom ? `, ${result.summary.facilitiesFrom} of them with a facilities list` : ""}
+          {result.summary.reviewsSeen ? `, across ${result.summary.reviewsSeen.toLocaleString("en-IN")} guest reviews` : ""}.
+          {result.summary.facilitiesFrom === 0 && " Google returned no facilities this run — Price & amenities explains why."}
+        </p>
+      </div>
     </div>
   );
 }
@@ -471,7 +504,7 @@ function Properties(props: {
       <button className="btn btn-ghost" style={{ alignSelf: "flex-start" }} onClick={props.back}><ArrowLeft aria-hidden="true" />All localities</button>
       <div className="card-h" style={{ marginBottom: 0 }}>
         <div>
-          <h2 id="results-h" ref={props.headingRef} tabIndex={-1} className={s.rh}>Hot properties in {area.name}</h2>
+          <h1 id="results-h" ref={props.headingRef} tabIndex={-1} className={s.rh}>Hot properties in {area.name}</h1>
           <p className="muted">{type === "All" ? "All stays" : `Comparable ${typeWord(type, true)}`}, ranked by rating and number of reviews</p>
         </div>
         <div className="row">
@@ -485,7 +518,9 @@ function Properties(props: {
         <div className="stat"><b className="num">{st.rating ? st.rating.toFixed(1) : "—"}</b><span>average guest rating</span></div>
         <div className="stat"><b className="num">{st.count}</b><span>{typeWord(type, true)} found</span></div>
       </div>
-      {nearLine(area) && <p className="muted">Nearest: {nearLine(area)} (straight-line distance)</p>}
+      {hasLandmarks(result)
+        ? nearLine(area) && <p className="muted">Nearest: {nearLine(area)} (straight-line distance)</p>
+        : <p className="muted">Nearby airports, stations and hospitals couldn’t be loaded from OpenStreetMap for this analysis.</p>}
       {props.noPrice > 0 && <p className="status info">{props.noPrice} {props.noPrice === 1 ? "stay is" : "stays are"} hidden because {props.noPrice === 1 ? "it doesn’t" : "they don’t"} show a price and a price filter is on.</p>}
       {!list.length ? (
         <div className="card empty">
@@ -507,7 +542,46 @@ function Properties(props: {
           </table>
         </div>
       )}
+      <AirbnbNearby result={result} area={area} />
       <p className="muted">Guest problems and fixes for {area.name} come from the review analysis in your plan. We summarise themes and never quote individual guests.</p>
+    </div>
+  );
+}
+
+/** Airbnb listings within 3 km: they carry real per-night prices that Google Maps often hides. */
+function AirbnbNearby({ result, area }: { result: CityResult; area: LiveArea }) {
+  const list = airbnbIn(result, area).sort((a, b) => (b.rating || 0) * Math.log10((b.reviews || 0) + 1) - (a.rating || 0) * Math.log10((a.reviews || 0) + 1));
+  if (!list.length) return null;
+  return (
+    <div className="stack" style={{ gap: 8 }}>
+      <h3 style={{ fontSize: 17 }}>Airbnb listings near {area.name}</h3>
+      <p className="muted">Priced for one night, a month ahead.</p>
+      <div className="tbl-wrap">
+        <table className="tbl rtbl">
+          <thead><tr><th scope="col">Listing</th><th scope="col" className="num">Nightly price</th><th scope="col" className="num">Rating</th><th scope="col" className="num">Reviews</th><th scope="col"><span className="sr">Link</span></th></tr></thead>
+          <tbody>
+            {list.slice(0, 10).map((x) => (
+              <tr key={x.url || x.name}>
+                <td className="rt-full">
+                  <b>{x.name}</b>{x.superhost && <span className="pill" style={{ marginLeft: 6 }}>Superhost</span>}
+                  <div className="muted">
+                    {[x.roomType || "Airbnb", x.bedrooms ? `${x.bedrooms} bed${x.bedrooms === 1 ? "" : "s"}room` : null, x.capacity ? `sleeps ${x.capacity}` : null].filter(Boolean).join(" · ")}
+                  </div>
+                  {x.sub && (x.sub.cleanliness || x.sub.location || x.sub.value) && (
+                    <div className="muted" style={{ fontSize: 12 }}>
+                      {[x.sub.cleanliness && `cleanliness ${x.sub.cleanliness}`, x.sub.location && `location ${x.sub.location}`, x.sub.value && `value ${x.sub.value}`].filter(Boolean).join(" · ")}
+                    </div>
+                  )}
+                </td>
+                <td className="num" data-label="Nightly price">{x.price ? inr(x.price) : <span className="muted">Not listed</span>}</td>
+                <td className="num" data-label="Rating">{x.rating ? x.rating.toFixed(2) : "—"}</td>
+                <td className="num" data-label="Reviews">{x.reviews || 0}</td>
+                <td style={{ textAlign: "right" }}>{x.url && <a className="btn btn-ghost" href={x.url} target="_blank" rel="noopener noreferrer">Open<ExternalLink aria-hidden="true" /></a>}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
@@ -518,20 +592,82 @@ function PropertyRow({ p, open, toggle }: { p: Place; open: boolean; toggle: () 
   return (
     <>
       <tr className={open ? "sel" : undefined}>
-        <td className="rt-full"><b>{p.name}</b><div className="muted">{p.cat || "Stay"}</div></td>
-        <td className="num" data-label="Nightly price">{price ? inr(price) : <span className="muted">Not listed</span>}</td>
+        <td className="rt-full">
+          <b>{p.name}</b>
+          <div className="muted">{p.stars ? `${p.stars}-star ` : ""}{p.cat || "Stay"}{p.open24 ? " · 24h reception" : ""}</div>
+        </td>
+        <td className="num" data-label="Nightly price">
+          {price ? inr(price) : <span className="muted">Not listed</span>}
+          {p.priceFrom === "ota" && price ? <div className="muted" style={{ fontSize: 12 }}>booking site</div> : null}
+        </td>
         <td className="num" data-label="Rating">{p.rating ? <>{p.rating.toFixed(1)}<span className="sr"> out of five</span></> : "—"}</td>
-        <td className="num" data-label="Reviews">{p.reviews.toLocaleString("en-IN")}</td>
+        <td className="num" data-label="Reviews">
+          {p.reviews.toLocaleString("en-IN")}
+          {p.unhappyPct != null ? <div className="muted" style={{ fontSize: 12 }}>{p.unhappyPct}% unhappy</div> : null}
+        </td>
         <td style={{ textAlign: "right" }}><button className="btn btn-ghost" aria-expanded={open} aria-controls={id} onClick={toggle} aria-label={`${open ? "Hide" : "Show"} details for ${p.name}`}>{open ? "Hide" : "Details"}</button></td>
       </tr>
       {open && (
         <tr id={id} className="rt-detail">
           <td colSpan={5} className="rt-full" style={{ background: "var(--surface-2)" }}>
-            <div className="stack" style={{ gap: 12, padding: "4px 0" }}>
+            <div className="stack" style={{ gap: 14, padding: "4px 0" }}>
+              {p.desc && <p style={{ margin: 0 }}>{p.desc}</p>}
+
+              {!!p.ota?.length && (
+                <div>
+                  <h4 className={s.mini}>What the booking sites charge</h4>
+                  <ul className={s.chips}>{p.ota.map((o) => <li key={o.site + o.price}>{o.site}: {inr(o.price)}{o.official ? " (direct)" : ""}</li>)}</ul>
+                </div>
+              )}
+
               <div>
-                <h4 className={s.mini}>Amenities listed</h4>
-                {p.amenities?.length ? <ul className={s.chips}>{p.amenities.map((a) => <li key={a}>{a}</li>)}</ul> : <p className="muted">This stay doesn’t list amenities on Google Maps.</p>}
+                <h4 className={s.mini}>Facilities{p.amenities?.length ? ` (${p.amenities.length})` : ""}</h4>
+                {p.amenities?.length
+                  ? <ul className={s.chips}>{p.amenities.map((a) => <li key={a}>{a}</li>)}</ul>
+                  : <p className="muted">Google has no facilities list on this property’s page.</p>}
               </div>
+
+              {!!p.missing?.length && (
+                <div>
+                  <h4 className={s.mini}>Google says it does not have</h4>
+                  <ul className={s.chips}>{p.missing.map((a) => <li key={a}>{a}</li>)}</ul>
+                  <p className="muted" style={{ marginTop: 6 }}>Anything here that guests in this city ask for is an opening for you.</p>
+                </div>
+              )}
+
+              {!!p.themes?.length && (
+                <div>
+                  <h4 className={s.mini}>What reviewers keep mentioning</h4>
+                  <ul className={s.chips}>{p.themes.map((t) => <li key={t}>{t}</li>)}</ul>
+                </div>
+              )}
+
+              {p.spread && (
+                <div>
+                  <h4 className={s.mini}>Rating breakdown ({p.spread.total.toLocaleString("en-IN")} reviews)</h4>
+                  <ul className="stack" style={{ listStyle: "none", margin: 0, padding: 0, gap: 6, maxWidth: 380 }}>
+                    {([["5", p.spread.five], ["4", p.spread.four], ["3", p.spread.three], ["2", p.spread.two], ["1", p.spread.one]] as const).map(([star, n]) => (
+                      <li key={star} className="row" style={{ gap: 8 }}>
+                        <span className="num" style={{ width: 16 }}>{star}</span>
+                        <div className="bar" style={{ flex: 1, height: 10 }}><i style={{ width: `${Math.round((n / Math.max(1, p.spread!.total)) * 100)}%` }} /></div>
+                        <span className="num muted" style={{ width: 64, textAlign: "right" }}>{n.toLocaleString("en-IN")}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {!!p.rivals?.length && (
+                <div>
+                  <h4 className={s.mini}>Google shows guests these instead</h4>
+                  <ul className="list" style={{ margin: 0 }}>
+                    {p.rivals.map((v) => (
+                      <li key={v.name}>{v.name}{v.rating ? ` · ${v.rating}★` : ""}{v.price ? ` · ${inr(v.price)}` : ""}{v.note ? ` · ${v.note}` : ""}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
               {p.url && <a href={p.url} target="_blank" rel="noopener noreferrer" className="btn btn-secondary" style={{ alignSelf: "flex-start" }}>Open on Google Maps<ExternalLink aria-hidden="true" /></a>}
             </div>
           </td>

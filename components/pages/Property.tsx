@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { Save, Wand2, Copy, Download, RotateCcw, CheckCircle2, MessageSquareText, Loader2 } from "lucide-react";
 import {
-  AMENITY_CATALOG, PROPERTY_TYPES, inr, listingLineFor, areaStats, placesIn, amenityCoverage,
+  AMENITY_CATALOG, PROPERTY_TYPES, inr, listingLineFor, areaStats, placesIn, facilityCoverage, airbnbIn,
   type PropertyType, type CityResult, type LiveArea,
 } from "@/lib/data";
 import { KEYS, useLocal, EMPTY_SELECTION, type Selection } from "@/lib/storage";
@@ -112,9 +112,20 @@ function PropertyForm({ result, cityKey, state, city, stored, setStored }: {
   const coverage = useMemo(() => {
     if (!area) return null;
     const list = placesIn(result, area, f.type);
-    const cov = amenityCoverage(list.length >= 3 ? list : placesIn(result, area, "All"));
-    return cov.total >= 3 ? cov : null;
+    const use = list.length >= 3 ? list : placesIn(result, area, "All");
+    const cov = facilityCoverage(use, airbnbIn(result, area));
+    return cov.of >= 3 ? { total: cov.of, items: cov.items.map((x) => ({ name: x.name, pct: x.pct, count: x.n })) } : null;
   }, [result, area, f.type]);
+
+  /* The checklist is what competitors here actually offer, not a fixed list: a locality where
+     everyone has a pool and nobody has power backup should read that way. Catalogue entries
+     nobody listed stay at the end so an owner can still tick something rare. */
+  const checklist = useMemo(() => {
+    const live = (coverage?.items || []).filter((x) => x.name.length <= 34).slice(0, 24);
+    const seen = new Set(live.map((x) => x.name.toLowerCase()));
+    const extra = AMENITY_CATALOG.filter((m) => !seen.has(m.toLowerCase()) && !live.some((x) => (MATCH[m] ? MATCH[m].test(x.name) : false)));
+    return [...live.map((x) => ({ name: x.name, pct: x.pct })), ...extra.map((name) => ({ name, pct: undefined as number | undefined }))];
+  }, [coverage]);
   const shareOf = (name: string) => {
     if (!coverage) return undefined;
     const re = MATCH[name];
@@ -234,18 +245,22 @@ function PropertyForm({ result, cityKey, state, city, stored, setStored }: {
         <fieldset style={{ border: 0, margin: 0, padding: 0 }}>
           <legend className="lbl" style={{ fontWeight: 600, marginBottom: 4 }}>Amenities you offer</legend>
           <p className="muted" style={{ marginBottom: 8 }}>
-            {coverage ? <>“Few offer this” means under 45% of the {coverage.total} stays in {area?.name} that list amenities have it.</> : area ? <>Not enough amenity data for {area.name} to compare.</> : <>Choose a locality to compare with competitors.</>}
+            {coverage
+              ? <>Counted across {coverage.total} stays in {area?.name}. The percentage is how many already offer it: under 40% sets you apart, over 80% is expected.</>
+              : area ? <>No competitor in {area.name} lists facilities yet, so these can’t be compared. Tick what you offer anyway.</> : <>Choose a locality to compare with competitors.</>}
           </p>
           <div className="grid-3" style={{ gap: 0 }}>
-            {AMENITY_CATALOG.map((m) => {
-              const share = shareOf(m);
-              return (
-                <label key={m} className="check">
-                  <input type="checkbox" checked={f.amenities.includes(m)} onChange={() => toggleIn("amenities", m)} />
-                  <span>{m}{share !== undefined && share < 45 && <span className="pill good" style={{ marginLeft: 6 }}>Few offer this</span>}</span>
-                </label>
-              );
-            })}
+            {checklist.map((m) => (
+              <label key={m.name} className="check">
+                <input type="checkbox" checked={f.amenities.includes(m.name)} onChange={() => toggleIn("amenities", m.name)} />
+                <span>
+                  {m.name}
+                  {m.pct !== undefined && <span className="muted" style={{ marginLeft: 6, fontSize: 12 }}>{m.pct}%</span>}
+                  {m.pct !== undefined && m.pct < 40 && <span className="pill good" style={{ marginLeft: 6 }}>Sets you apart</span>}
+                  {m.pct !== undefined && m.pct >= 80 && <span className="pill" style={{ marginLeft: 6 }}>Expected</span>}
+                </span>
+              </label>
+            ))}
           </div>
         </fieldset>
 

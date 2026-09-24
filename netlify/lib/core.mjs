@@ -248,15 +248,33 @@ export function km(a, b) {
   const h = Math.sin(dLat / 2) ** 2 + Math.cos(t(a.lat)) * Math.cos(t(b.lat)) * Math.sin(dLng / 2) ** 2;
   return Math.round(2 * R * Math.asin(Math.sqrt(h)) * 10) / 10;
 }
-export function parseINR(v) {
+/* ---------- Prices ----------
+ * Google Maps shows Indian stays in US dollars for many searches ("$135"), so a price is only
+ * meaningful together with its currency. Everything is converted to rupees before it is compared.
+ */
+const RATES = { $: 88, USD: 88, "£": 112, GBP: 112, "€": 95, EUR: 95, "₹": 1, INR: 1, Rs: 1 };
+export const usdToInr = () => Number(env("USD_INR")) || RATES.$;
+
+/** Reads "$135", "₹8,500", "1,500–2,000", "$1.2K" -> rupees per night, or null when there's no number. */
+export function priceToINR(v) {
   if (v == null) return null;
-  if (typeof v === "number") return v > 100 && v < 500000 ? Math.round(v) : null;
-  const s = String(v).replace(/,/g, "");
-  const m = s.match(/(\d+(?:\.\d+)?)\s*([kK])?/);
-  if (!m) return null;
-  let n = parseFloat(m[1]) * (m[2] ? 1000 : 1);
-  return n > 100 && n < 500000 ? Math.round(n) : null;
+  const raw = String(typeof v === "object" ? (v.label ?? v.amount ?? "") : v).trim();
+  if (!raw) return null;
+  const cleaned = raw.replace(/,/g, "");
+  const nums = [...cleaned.matchAll(/(\d+(?:\.\d+)?)\s*([kK])?/g)].map((m) => parseFloat(m[1]) * (m[2] ? 1000 : 1));
+  if (!nums.length) return null;
+  // A range ("1,500-2,000") is represented by its midpoint.
+  const n = nums.length > 1 && /[-–—]/.test(cleaned) ? (nums[0] + nums[1]) / 2 : nums[0];
+  let rate = 1;
+  if (/\$|usd/i.test(cleaned)) rate = usdToInr();
+  else if (/£|gbp/i.test(cleaned)) rate = RATES["£"];
+  else if (/€|eur/i.test(cleaned)) rate = RATES["€"];
+  const inr = Math.round(n * rate);
+  return inr >= 150 && inr < 2000000 ? inr : null; // below ₹150 a night isn't a real stay price
 }
+/** Kept for older callers: same rules, rupee input. */
+export const parseINR = (v) => priceToINR(v);
+
 export const median = (arr) => {
   const a = arr.filter((x) => typeof x === "number" && isFinite(x)).sort((x, y) => x - y);
   if (!a.length) return null;

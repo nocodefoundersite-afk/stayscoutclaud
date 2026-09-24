@@ -7,11 +7,6 @@ import type { CityResult } from "@/lib/data";
 
 const TIER = { best: "#1B8A4B", medium: "#D98E04", worst: "#C2321F" } as const;
 
-const isDark = () => {
-  const t = document.documentElement.getAttribute("data-theme");
-  return t ? t === "dark" : window.matchMedia("(prefers-color-scheme: dark)").matches;
-};
-
 /** Localities as circles (green strong, amber mixed, red weak) with airports and stations as dots. */
 export default function AreaMap({ result, hrefFor }: { result: CityResult; hrefFor: (id: string) => string }) {
   const el = useRef<HTMLDivElement>(null);
@@ -27,9 +22,9 @@ export default function AreaMap({ result, hrefFor }: { result: CityResult; hrefF
         const L = ((mod as unknown as { default?: typeof mod }).default ?? mod) as typeof import("leaflet");
         if (cancelled || !el.current) return;
         map = L.map(el.current, { scrollWheelZoom: false, zoomControl: true }).setView([result.center.lat, result.center.lng], 12);
-        L.tileLayer(`https://{s}.basemaps.cartocdn.com/${isDark() ? "dark_all" : "light_all"}/{z}/{x}/{y}{r}.png`, {
-          subdomains: "abcd", maxZoom: 19,
-          attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
+        L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+          maxZoom: 19,
+          attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
         }).addTo(map);
         result.areas.filter((a) => isFinite(a.lat) && isFinite(a.lng)).forEach((a) =>
           L.circle([a.lat, a.lng], { radius: Math.max(350, Math.min(a.radiusKm, 3) * 700), color: TIER[a.tier], fillColor: TIER[a.tier], fillOpacity: 0.22, weight: 2 })

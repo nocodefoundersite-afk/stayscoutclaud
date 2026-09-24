@@ -58,7 +58,8 @@ function useJob<T>(id: string | null, getUrl: string, postUrl: string, postBody:
       if (j.status === "ready") { ready.set(mine, { result: j.result, readyAt: j.readyAt }); setJob({ status: "ready", result: j.result as T, readyAt: j.readyAt }); return; }
       if (j.status === "none") { setJob({ status: "none" }); return; }
       if (j.status === "failed") { setJob({ status: "failed", error: j.error, retryFree: !!j.retryFree }); return; }
-      setJob({ status: j.status, step: j.step });
+      // Keep the results already on screen while a step re-runs, so the page doesn't go blank.
+      setJob((prev) => ({ status: j.status, step: j.step, result: prev.result, readyAt: prev.readyAt }));
       timer.current = window.setTimeout(poll, POLL_MS);
     } catch (e) {
       if (live.current !== mine) return;
@@ -84,7 +85,11 @@ function useJob<T>(id: string | null, getUrl: string, postUrl: string, postBody:
     setStartError(null);
     try {
       const res = await postJSON(postUrl, { ...JSON.parse(postBody), ...(extra || {}) });
-      setJob({ status: res?.status === "analyzing" ? "analyzing" : "running", step: res?.status === "analyzing" ? "Running the AI step again…" : "Starting…" });
+      setJob((prev) => ({
+        status: res?.status === "analyzing" ? "analyzing" : "running",
+        step: res?.status === "analyzing" ? "Running the AI step again…" : "Starting…",
+        result: prev.result, readyAt: prev.readyAt,
+      }));
       timer.current = window.setTimeout(poll, 2500);
     } catch (e) {
       const err = e as ApiError;

@@ -33,7 +33,8 @@ const MOBILE = [
   { href: "/profile", label: "More", icon: MoreHorizontal },
 ];
 const BARE = ["/login", "/register", "/forgot-password", "/reset-password"];
-/** Pages anyone can open. Everything else needs a signed-in account. */
+/** Pages anyone can open. Everything else needs a signed-in account.
+ *  "/" is public too, but only as the marketing front door: signed in, it renders the finder inside the app shell. */
 const PUBLIC = [...BARE, "/help", "/privacy", "/terms", "/contact", "/plans"];
 const CITIES = Object.entries(STATES).flatMap(([state, list]) => list.map((city) => ({ state, city })));
 
@@ -127,12 +128,16 @@ export default function Shell({ children }: { children: React.ReactNode }) {
   const isActive = (href: string) => (href === "/" ? path === "/" : path.startsWith(href));
   const market = [sel.city, sel.state].filter(Boolean).join(", ") || "No market selected";
   const initial = (user?.name || user?.email || "?").trim().charAt(0).toUpperCase();
-  const isPublic = PUBLIC.some((b) => path.startsWith(b));
+  const isHome = path === "/";
+  const isPublic = isHome || PUBLIC.some((b) => path.startsWith(b));
   const locked = !isPublic && (!authReady || !user);
   useEffect(() => {
     if (authReady && !user && !isPublic && !linkBusy) router.replace(`/login/?next=${encodeURIComponent(path + window.location.search)}`);
   }, [authReady, user, isPublic, linkBusy, path, router]);
   const toastEl = toast && <p className={`status ${toast.kind} toast`} role={toast.kind === "err" ? "alert" : "status"}>{toast.text}</p>;
+
+  /* The landing page brings its own header and footer, so the app chrome stays out of its way. */
+  if (isHome && authReady && !user && !linkBusy) return <>{children}{toastEl}</>;
 
   if (BARE.some((b) => path.startsWith(b))) {
     return (

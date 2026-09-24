@@ -6,7 +6,7 @@ import {
   ArrowLeft, Home, Calculator, Download, Bookmark, BookmarkCheck, Sparkles, AlertTriangle, Wrench, Ban, MapPin,
   Loader2, MessageSquareText, LogIn, Quote, Heart, Tags, RefreshCw,
 } from "lucide-react";
-import { inr, areaStats, placesIn, amenityCoverage, nearLine, type CityResult, type LiveArea, type TypeFilter, type AreaResult } from "@/lib/data";
+import { inr, areaStats, placesIn, facilityCoverage, airbnbIn, nearLine, type CityResult, type LiveArea, type TypeFilter, type AreaResult } from "@/lib/data";
 import { useAreaReview } from "@/lib/live";
 import { Live } from "@/lib/ui";
 import s from "./finder.module.css";
@@ -17,9 +17,11 @@ const prioTone = (p: string) => (p === "Must fix" ? "bad" : p === "Should fix" ?
 
 export function planData(result: CityResult, area: LiveArea, type: TypeFilter, review: AreaResult | null) {
   const places = placesIn(result, area, type === "All" ? "All" : type);
-  const cov = amenityCoverage(places.length >= 3 ? places : placesIn(result, area, "All"));
-  const must = cov.total >= 3 ? cov.items.filter((x) => x.pct >= 70).slice(0, 6) : [];
-  const gaps = cov.total >= 3 ? cov.items.filter((x) => x.pct < 45 && x.count >= 1).slice(0, 6) : [];
+  const use = places.length >= 3 ? places : placesIn(result, area, "All");
+  const fc = facilityCoverage(use, airbnbIn(result, area));
+  const cov = { total: fc.of, items: fc.items.map((x) => ({ name: x.name, pct: x.pct, count: x.n })) };
+  const must = cov.total >= 3 ? fc.stakes.map((x) => ({ name: x.name, pct: x.pct, count: x.n })).slice(0, 6) : [];
+  const gaps = cov.total >= 3 ? fc.gaps.map((x) => ({ name: x.name, pct: x.pct, count: x.n })).slice(0, 6) : [];
   const ai = result.ai || {};
   const lower = area.name.toLowerCase();
   const pricing = (ai.pricing_by_location || []).filter((p) => (p.areas || []).some((x) => x.toLowerCase().includes(lower) || lower.includes(x.toLowerCase())));
@@ -81,7 +83,7 @@ export default function Plan(props: {
       <button className="btn btn-ghost" style={{ alignSelf: "flex-start" }} onClick={props.back}><ArrowLeft aria-hidden="true" />Back to properties</button>
       <div className={`card ${s.planHead}`}>
         <p className="muted">Your plan · live data{rv?.ai?.verdict ? <> · <span className={`pill ${verdictTone(rv.ai.verdict)}`}>{rv.ai.verdict}</span></> : null}</p>
-        <h2 id="results-h" ref={props.headingRef} tabIndex={-1} className={s.rh}>A {typeWord(type)} in {area.name}, {cityName}</h2>
+        <h1 id="results-h" ref={props.headingRef} tabIndex={-1} className={s.rh}>A {typeWord(type)} in {area.name}, {cityName}</h1>
         <p style={{ color: "var(--ink-2)" }}>
           Typical {typeWord(type)} price here: <b>{price ? `${inr(price)} a night` : "not enough price data yet"}</b>
           {d.st.rating ? <> · average rating <b>{d.st.rating.toFixed(1)}</b> out of five</> : null} · {d.st.count} comparable {d.st.count === 1 ? "stay" : "stays"}.

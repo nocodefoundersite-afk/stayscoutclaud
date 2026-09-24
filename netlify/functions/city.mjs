@@ -5,12 +5,25 @@
  * POST /api/city {country,state,city} (signed in) -> starts ONE Google Maps stays search + ONE Airbnb search (cached 7 days)
  * GET  /api/city?key=...                   -> status; when both finish, triggers background analysis; returns result when ready
  */
-import { store, json, slug, WEEK_MS, apifyStart, apifyStatus, useBudget, requireUser } from "../lib/core.mjs";
+import { store, json, slug, WEEK_MS, apifyStart, apifyStatus, useBudget, requireUser, env } from "../lib/core.mjs";
 
 const MAPS = "compass~crawler-google-places";
 const AIRBNB = "tri_angle~airbnb-scraper";
-const SEARCHES = ["hotels", "homestays", "resorts", "guest houses", "hostels", "villas", "farm stays"];
-const PER_SEARCH = 14;
+const SEARCHES = [
+  "hotels", "homestays", "resorts", "guest houses", "hostels", "villas",
+  "farm stays", "bed and breakfast", "service apartments", "boutique hotels",
+  "budget hotels", "cottages",
+];
+/*
+ * Apify charges per unit, so depth is a money decision and lives in environment variables:
+ *   scraped place $4/1,000 · detail page $2/1,000 · review $0.50/1,000 · Airbnb result $1.25/1,000
+ * The defaults below cost roughly $2 a city. Lower MAPS_PER_SEARCH or set MAPS_REVIEWS=0 to spend less.
+ * Detail pages are what carry amenities, facilities and accessibility: without them those fields come back empty.
+ */
+const num = (name, dflt) => { const n = Number(env(name)); return Number.isFinite(n) && n >= 0 ? n : dflt; };
+const PER_SEARCH = () => num("MAPS_PER_SEARCH", 30);
+const REVIEWS_PER_PLACE = () => num("MAPS_REVIEWS", 5);
+const AIRBNB_RESULTS = () => num("AIRBNB_RESULTS", 300);
 
 export default async (req) => {
   try {
@@ -35,7 +48,8 @@ export default async (req) => {
         }).catch(() => {});
         return json({ key, status: "analyzing", free: true });
       }
-      if (cur?.status === "ready" && Date.now() - cur.readyAt < WEEK_MS) return json({ key, status: "ready" });
+      // "force" refreshes a city before the 7-day cache expires; it spends data fetches like a new analysis.
+      if (!b.force && cur?.status === "ready" && Date.now() - cur.readyAt < WEEK_MS) return json({ key, status: "ready" });
       if (cur && ["running", "collected", "analyzing"].includes(cur.status) && Date.now() - cur.startedAt < 20 * 60 * 1000)
         return json({ key, status: cur.status });
       await useBudget(user);
@@ -43,17 +57,27 @@ export default async (req) => {
       const maps = await apifyStart(MAPS, {
         searchStringsArray: SEARCHES,
         locationQuery: where,
-        maxCrawledPlacesPerSearch: PER_SEARCH,
+        maxCrawledPlacesPerSearch: PER_SEARCH(),
         language: "en",
-        maxReviews: 0,
+        // The detail page is the only place amenities, facilities, accessibility, hotel class,
+        // booking-site prices and the star breakdown exist. Without it every stay looks bare.
+        scrapePlaceDetailPage: true,
+        maxReviews: REVIEWS_PER_PLACE(),
+        reviewsSort: "newest",
+        maxImages: 0,
         skipClosedPlaces: true,
       });
       let airbnb = null;
+      // One night, a month out: the actor then prices a single night, which is what compares with hotel rates.
+      const day = (n) => new Date(Date.now() + n * 864e5).toISOString().slice(0, 10);
       try {
         await useBudget(user);
-        airbnb = await apifyStart(AIRBNB, { locationQueries: [where], maxResults: 20, currency: "INR", locale: "en-US" });
+        airbnb = await apifyStart(AIRBNB, {
+          locationQueries: [where], maxResults: AIRBNB_RESULTS(), currency: "INR", locale: "en-US",
+          checkIn: day(30), checkOut: day(31), adults: 2,
+        });
       } catch (_) { /* Airbnb is optional; Google Maps still gives the full picture */ }
-      await s.setJSON(`city/${key}`, { status: "running", q, maps, airbnb, startedAt: Date.now(), job: crypto.randomUUID(), by: user.id });
+      await s.setJSON(`city/${key}`, { status: "running", q, maps, airbnb, airbnbNights: 1, startedAt: Date.now(), job: crypto.randomUUID(), by: user.id });
       return json({ key, status: "running" });
     }
 
